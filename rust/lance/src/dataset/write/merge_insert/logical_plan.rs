@@ -99,6 +99,7 @@ impl UserDefinedLogicalNodeCore for MergeInsertWriteNode {
             crate::dataset::WhenMatched::UpdateAll => "UpdateAll",
             crate::dataset::WhenMatched::UpdateIf(_) => "UpdateIf",
             crate::dataset::WhenMatched::Fail => "Fail",
+            crate::dataset::WhenMatched::Delete => "Delete",
         };
         let when_not_matched = if self.params.insert_not_matched {
             "InsertAll"
@@ -145,19 +146,33 @@ impl UserDefinedLogicalNodeCore for MergeInsertWriteNode {
 
     fn necessary_children_exprs(&self, _output_columns: &[usize]) -> Option<Vec<Vec<usize>>> {
         // Going to need:
-        // * all columns from the `source` relation
+        // * all columns from the `source` relation (or just key columns for delete-only)
         // * `__action` column (unqualified)
         // * `target._rowaddr` column specifically
 
         let input_schema = self.input.schema();
         let mut necessary_columns = Vec::new();
 
+        // Check if this is a delete-only operation (no writes needed)
+        // In delete-only mode, we only need the key columns from source for matching
+        let is_delete_only = matches!(
+            self.params.when_matched,
+            crate::dataset::WhenMatched::Delete | crate::dataset::WhenMatched::DoNothing
+        ) && !self.params.insert_not_matched;
+
         for (i, (qualifier, field)) in input_schema.iter().enumerate() {
             let should_include = match qualifier {
-                // Include all source columns - they contain the new data to write
-                Some(qualifier) if qualifier.table() == "source" => true,
+                // For delete-only: only include source KEY columns (for matching)
+                // For other ops: include all source columns - they contain the new data to write
+                Some(qualifier) if qualifier.table() == "source" => {
+                    if is_delete_only {
+                        self.params.on.iter().any(|k| k == field.name())
+                    } else {
+                        true
+                    }
+                }
 
-                // Include target._rowaddr specifically - needed to locate existing rows for updates
+                // Include target._rowaddr specifically - needed to locate existing rows for updates/deletes
                 Some(qualifier) if qualifier.table() == "target" && field.name() == ROW_ADDR => {
                     true
                 }

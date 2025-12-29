@@ -701,6 +701,7 @@ impl DisplayAs for FullSchemaMergeInsertExec {
                         format!("UpdateIf({})", condition)
                     }
                     crate::dataset::WhenMatched::Fail => "Fail".to_string(),
+                    crate::dataset::WhenMatched::Delete => "Delete".to_string(),
                 };
                 let when_not_matched = if self.params.insert_not_matched {
                     "InsertAll"
