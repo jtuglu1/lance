@@ -1444,7 +1444,7 @@ impl MergeInsertJob {
 
         // Check if this is a delete-only operation (no update/insert writes needed from source)
         // For delete-only, we don't need the full source schema, just key columns for matching
-        let is_delete_only = matches!(
+        let no_upsert = matches!(
             self.params.when_matched,
             WhenMatched::Delete | WhenMatched::DoNothing
         ) && !self.params.insert_not_matched;
@@ -1456,7 +1456,7 @@ impl MergeInsertJob {
                 .iter()
                 .any(|f| f.name() == key.as_str())
         });
-        let schema_ok = is_full_schema || (is_delete_only && source_has_key_columns);
+        let schema_ok = is_full_schema || (no_upsert && source_has_key_columns);
 
         Ok(matches!(
             self.params.when_matched,
@@ -1464,7 +1464,6 @@ impl MergeInsertJob {
                 | WhenMatched::UpdateIf(_)
                 | WhenMatched::Fail
                 | WhenMatched::Delete
-                | WhenMatched::DoNothing
         ) && (!self.params.use_index || !has_scalar_index)
             && schema_ok
             && matches!(
@@ -5370,6 +5369,26 @@ MergeInsert: on=[id], when_matched=UpdateAll, when_not_matched=InsertAll, when_n
 
         let keys = vec!["key".to_string()];
 
+        // First, verify the execution plan structure
+        // Delete-only should use Inner join and only include key columns (optimization)
+        // Action 3 = Delete
+        let plan_job = MergeInsertBuilder::try_new(ds.clone(), keys.clone())
+            .unwrap()
+            .when_matched(WhenMatched::Delete)
+            .when_not_matched(WhenNotMatched::DoNothing)
+            .try_build()
+            .unwrap();
+        let plan_stream = reader_to_stream(Box::new(RecordBatchIterator::new(
+            [Ok(new_batch.clone())],
+            schema.clone(),
+        )));
+        let plan = plan_job.create_plan(plan_stream).await.unwrap();
+        // Verify key structural elements: MergeInsert config, Delete action (3), key-only projection
+        assert_plan_node_equals(
+            plan,
+            "MergeInsert: on=[key], when_matched=Delete, when_not_matched=DoNothing, when_not_matched_by_source=Keep...CASE WHEN key@2 IS NOT NULL AND _rowaddr@1 IS NOT NULL THEN 3 ELSE 0 END as __action]...StreamingTableExec: partition_sizes=1, projection=[key]"
+        ).await.unwrap();
+
         // WhenMatched::Delete - delete matched rows, don't insert unmatched
         let job = MergeInsertBuilder::try_new(ds.clone(), keys)
             .unwrap()
@@ -5420,8 +5439,6 @@ MergeInsert: on=[id], when_matched=UpdateAll, when_not_matched=InsertAll, when_n
 
         // Create dataset with keys 1-6 (full schema: key, value, filterme)
         let ds = create_test_dataset(test_uri, version, enable_stable_row_ids).await;
-
-        // Source data has ONLY key column - this is the bulk delete optimization case
         let id_only_schema = Arc::new(Schema::new(vec![Field::new("key", DataType::UInt32, true)]));
         let new_batch = RecordBatch::try_new(
             id_only_schema.clone(),
@@ -5430,6 +5447,24 @@ MergeInsert: on=[id], when_matched=UpdateAll, when_not_matched=InsertAll, when_n
         .unwrap();
 
         let keys = vec!["key".to_string()];
+
+        // ID-only delete should use Inner join with key-only projection
+        // on=[(key@0, key@0)] because key is at position 0 in both target and source
+        let plan_job = MergeInsertBuilder::try_new(ds.clone(), keys.clone())
+            .unwrap()
+            .when_matched(WhenMatched::Delete)
+            .when_not_matched(WhenNotMatched::DoNothing)
+            .try_build()
+            .unwrap();
+        let plan_stream = reader_to_stream(Box::new(RecordBatchIterator::new(
+            [Ok(new_batch.clone())],
+            id_only_schema.clone(),
+        )));
+        let plan = plan_job.create_plan(plan_stream).await.unwrap();
+        assert_plan_node_equals(
+            plan,
+            "MergeInsert: on=[key], when_matched=Delete, when_not_matched=DoNothing, when_not_matched_by_source=Keep...CASE WHEN key@2 IS NOT NULL AND _rowaddr@1 IS NOT NULL THEN 3 ELSE 0 END as __action]...StreamingTableExec: partition_sizes=1, projection=[key]"
+        ).await.unwrap();
 
         // WhenMatched::Delete with ID-only source - should only need key columns for matching
         let job = MergeInsertBuilder::try_new(ds.clone(), keys)
@@ -5491,6 +5526,23 @@ MergeInsert: on=[id], when_matched=UpdateAll, when_not_matched=InsertAll, when_n
 
         let keys = vec!["key".to_string()];
 
+        // Delete + Insert should use Right join to see unmatched rows for insertion
+        let plan_job = MergeInsertBuilder::try_new(ds.clone(), keys.clone())
+            .unwrap()
+            .when_matched(WhenMatched::Delete)
+            .when_not_matched(WhenNotMatched::InsertAll)
+            .try_build()
+            .unwrap();
+        let plan_stream = reader_to_stream(Box::new(RecordBatchIterator::new(
+            [Ok(new_batch.clone())],
+            schema.clone(),
+        )));
+        let plan = plan_job.create_plan(plan_stream).await.unwrap();
+        assert_plan_node_equals(
+            plan,
+            "MergeInsert: on=[key], when_matched=Delete, when_not_matched=InsertAll, when_not_matched_by_source=Keep...THEN 2 WHEN...THEN 3 ELSE 0 END as __action]...projection=[key, value, filterme]"
+        ).await.unwrap();
+
         // Delete matched rows, insert unmatched rows
         let job = MergeInsertBuilder::try_new(ds.clone(), keys)
             .unwrap()
@@ -5551,5 +5603,89 @@ MergeInsert: on=[id], when_matched=UpdateAll, when_not_matched=InsertAll, when_n
                 assert_eq!(value, 2, "New keys should have value=2");
             }
         }
+    }
+
+    /// Test WhenMatched::Delete when source data has no matching keys.
+    /// This should result in zero deletes and the dataset remains unchanged.
+    #[rstest::rstest]
+    #[tokio::test]
+    async fn test_when_matched_delete_no_matches(
+        #[values(LanceFileVersion::Legacy, LanceFileVersion::V2_0)] version: LanceFileVersion,
+    ) {
+        let schema = create_test_schema();
+        let test_uri = "memory://test_delete_no_matches.lance";
+
+        // Create dataset with keys 1-6
+        let ds = create_test_dataset(test_uri, version, false).await;
+
+        // Source data has keys 100, 200, 300 - none match existing keys 1-6
+        let non_matching_batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(UInt32Array::from(vec![100, 200, 300])),
+                Arc::new(UInt32Array::from(vec![10, 20, 30])),
+                Arc::new(StringArray::from(vec!["X", "Y", "Z"])),
+            ],
+        )
+        .unwrap();
+
+        let keys = vec!["key".to_string()];
+
+        // Even with no matches, the plan structure should be the same
+        let plan_job = MergeInsertBuilder::try_new(ds.clone(), keys.clone())
+            .unwrap()
+            .when_matched(WhenMatched::Delete)
+            .when_not_matched(WhenNotMatched::DoNothing)
+            .try_build()
+            .unwrap();
+        let plan_stream = reader_to_stream(Box::new(RecordBatchIterator::new(
+            [Ok(non_matching_batch.clone())],
+            schema.clone(),
+        )));
+        let plan = plan_job.create_plan(plan_stream).await.unwrap();
+        assert_plan_node_equals(
+            plan,
+            "MergeInsert: on=[key], when_matched=Delete, when_not_matched=DoNothing, when_not_matched_by_source=Keep...CASE WHEN key@2 IS NOT NULL AND _rowaddr@1 IS NOT NULL THEN 3 ELSE 0 END as __action]...StreamingTableExec: partition_sizes=1, projection=[key]"
+        ).await.unwrap();
+
+        // Execute the delete operation
+        let job = MergeInsertBuilder::try_new(ds.clone(), keys)
+            .unwrap()
+            .when_matched(WhenMatched::Delete)
+            .when_not_matched(WhenNotMatched::DoNothing)
+            .try_build()
+            .unwrap();
+
+        let new_reader = Box::new(RecordBatchIterator::new(
+            [Ok(non_matching_batch)],
+            schema.clone(),
+        ));
+        let new_stream = reader_to_stream(new_reader);
+
+        let (merged_dataset, merge_stats) = job.execute(new_stream).await.unwrap();
+
+        // Should have deleted 0 rows since no keys matched
+        assert_eq!(merge_stats.num_deleted_rows, 0);
+        assert_eq!(merge_stats.num_inserted_rows, 0);
+        assert_eq!(merge_stats.num_updated_rows, 0);
+
+        // Verify all original data remains unchanged - keys 1-6 should all still be present
+        let batches = merged_dataset
+            .scan()
+            .try_into_stream()
+            .await
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+
+        let merged = concat_batches(&schema, &batches).unwrap();
+        let mut remaining_keys: Vec<u32> = merged
+            .column(0)
+            .as_primitive::<UInt32Type>()
+            .values()
+            .to_vec();
+        remaining_keys.sort();
+        assert_eq!(remaining_keys, vec![1, 2, 3, 4, 5, 6]);
     }
 }

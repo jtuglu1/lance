@@ -155,9 +155,9 @@ impl UserDefinedLogicalNodeCore for MergeInsertWriteNode {
 
         // Check if this is a delete-only operation (no writes needed)
         // In delete-only mode, we only need the key columns from source for matching
-        let is_delete_only = matches!(
+        let no_upsert = matches!(
             self.params.when_matched,
-            crate::dataset::WhenMatched::Delete | crate::dataset::WhenMatched::DoNothing
+            crate::dataset::WhenMatched::Delete
         ) && !self.params.insert_not_matched;
 
         for (i, (qualifier, field)) in input_schema.iter().enumerate() {
@@ -165,7 +165,7 @@ impl UserDefinedLogicalNodeCore for MergeInsertWriteNode {
                 // For delete-only: only include source KEY columns (for matching)
                 // For other ops: include all source columns - they contain the new data to write
                 Some(qualifier) if qualifier.table() == "source" => {
-                    if is_delete_only {
+                    if no_upsert {
                         self.params.on.iter().any(|k| k == field.name())
                     } else {
                         true
