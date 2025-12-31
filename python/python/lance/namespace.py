@@ -20,6 +20,8 @@ from lance_namespace import (
     CreateNamespaceResponse,
     CreateTableRequest,
     CreateTableResponse,
+    DeclareTableRequest,
+    DeclareTableResponse,
     DeregisterTableRequest,
     DeregisterTableResponse,
     DescribeNamespaceRequest,
@@ -218,6 +220,10 @@ class DirectoryNamespace(LanceNamespace):
         response_dict = self._inner.create_empty_table(request.model_dump())
         return CreateEmptyTableResponse.from_dict(response_dict)
 
+    def declare_table(self, request: DeclareTableRequest) -> DeclareTableResponse:
+        response_dict = self._inner.declare_table(request.model_dump())
+        return DeclareTableResponse.from_dict(response_dict)
+
 
 class RestNamespace(LanceNamespace):
     """REST-based Lance Namespace implementation backed by Rust.
@@ -333,6 +339,10 @@ class RestNamespace(LanceNamespace):
     ) -> CreateEmptyTableResponse:
         response_dict = self._inner.create_empty_table(request.model_dump())
         return CreateEmptyTableResponse.from_dict(response_dict)
+
+    def declare_table(self, request: DeclareTableRequest) -> DeclareTableResponse:
+        response_dict = self._inner.declare_table(request.model_dump())
+        return DeclareTableResponse.from_dict(response_dict)
 
 
 class RestAdapter:

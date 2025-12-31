@@ -154,9 +154,12 @@ dependencies = [
 
 [[package]]
 name = "arc-swap"
-version = "1.7.1"
+version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69f7f8c3906b62b754cd5326047894316021dcfe5a194c8ea52bdd94934a3457"
+checksum = "51d03449bb8ca2cc2ef70869af31463d1ae5ccc8fa3e334b307203fbf815207e"
+dependencies = [
+ "rustversion",
+]
 
 [[package]]
 name = "arrayref"
@@ -819,9 +822,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-runtime"
-version = "1.9.6"
+version = "1.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "65fda37911905ea4d3141a01364bc5509a0f32ae3f3b22d6e330c0abfb62d247"
+checksum = "a392db6c583ea4a912538afb86b7be7c5d8887d91604f50eb55c262ee1b4a5f5"
 dependencies = [
  "aws-smithy-async",
  "aws-smithy-http",
@@ -2723,7 +2726,7 @@ checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
 
 [[package]]
 name = "fsst"
-version = "2.0.0-beta.5"
+version = "2.0.0-beta.4"
 dependencies = [
  "arrow-array",
  "rand 0.9.2",
@@ -3842,7 +3845,7 @@ dependencies = [
 
 [[package]]
 name = "lance"
-version = "2.0.0-beta.5"
+version = "2.0.0-beta.4"
 dependencies = [
  "arrow",
  "arrow-arith",
@@ -3906,7 +3909,7 @@ dependencies = [
 
 [[package]]
 name = "lance-arrow"
-version = "2.0.0-beta.5"
+version = "2.0.0-beta.4"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -3925,7 +3928,7 @@ dependencies = [
 
 [[package]]
 name = "lance-bitpacking"
-version = "2.0.0-beta.5"
+version = "2.0.0-beta.4"
 dependencies = [
  "arrayref",
  "paste",
@@ -3934,7 +3937,7 @@ dependencies = [
 
 [[package]]
 name = "lance-core"
-version = "2.0.0-beta.5"
+version = "2.0.0-beta.4"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -3971,7 +3974,7 @@ dependencies = [
 
 [[package]]
 name = "lance-datafusion"
-version = "2.0.0-beta.5"
+version = "2.0.0-beta.4"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -4002,7 +4005,7 @@ dependencies = [
 
 [[package]]
 name = "lance-datagen"
-version = "2.0.0-beta.5"
+version = "2.0.0-beta.4"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -4020,7 +4023,7 @@ dependencies = [
 
 [[package]]
 name = "lance-encoding"
-version = "2.0.0-beta.5"
+version = "2.0.0-beta.4"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -4057,7 +4060,7 @@ dependencies = [
 
 [[package]]
 name = "lance-file"
-version = "2.0.0-beta.5"
+version = "2.0.0-beta.4"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -4089,7 +4092,7 @@ dependencies = [
 
 [[package]]
 name = "lance-geo"
-version = "2.0.0-beta.5"
+version = "2.0.0-beta.4"
 dependencies = [
  "datafusion",
  "geo-types",
@@ -4100,7 +4103,7 @@ dependencies = [
 
 [[package]]
 name = "lance-index"
-version = "2.0.0-beta.5"
+version = "2.0.0-beta.4"
 dependencies = [
  "arrow",
  "arrow-arith",
@@ -4162,7 +4165,7 @@ dependencies = [
 
 [[package]]
 name = "lance-io"
-version = "2.0.0-beta.5"
+version = "2.0.0-beta.4"
 dependencies = [
  "arrow",
  "arrow-arith",
@@ -4235,7 +4238,7 @@ dependencies = [
 
 [[package]]
 name = "lance-linalg"
-version = "2.0.0-beta.5"
+version = "2.0.0-beta.4"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -4251,7 +4254,7 @@ dependencies = [
 
 [[package]]
 name = "lance-namespace"
-version = "2.0.0-beta.5"
+version = "2.0.0-beta.4"
 dependencies = [
  "arrow",
  "async-trait",
@@ -4263,7 +4266,7 @@ dependencies = [
 
 [[package]]
 name = "lance-namespace-impls"
-version = "2.0.0-beta.5"
+version = "2.0.0-beta.4"
 dependencies = [
  "arrow",
  "arrow-ipc",
@@ -4302,9 +4305,9 @@ dependencies = [
 
 [[package]]
 name = "lance-namespace-reqwest-client"
-version = "0.3.2"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00a21b43fe2a373896727b97927adedd2683d2907683f294f62cf8815fbf6a01"
+checksum = "4dfe76b82f4167fa1c19d5d8825f8fb7d3831e83fa6e0485b3dd59ef0f7b1685"
 dependencies = [
  "reqwest",
  "serde",
@@ -4315,7 +4318,7 @@ dependencies = [
 
 [[package]]
 name = "lance-table"
-version = "2.0.0-beta.5"
+version = "2.0.0-beta.4"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -6395,15 +6398,15 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.146"
+version = "1.0.147"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "217ca874ae0207aac254aa02c957ded05585a90892cc8d87f9e5fa49669dadd8"
+checksum = "6af14725505314343e673e9ecb7cd7e8a36aa9791eb936235a3567cc31447ae4"
 dependencies = [
  "itoa",
  "memchr",
- "ryu",
  "serde",
  "serde_core",
+ "zmij",
 ]
 
 [[package]]
@@ -8239,6 +8242,12 @@ name = "zlib-rs"
 version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40990edd51aae2c2b6907af74ffb635029d5788228222c4bb811e9351c0caad3"
+
+[[package]]
+name = "zmij"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e404bcd8afdaf006e529269d3e85a743f9480c3cef60034d77860d02964f3ba"
 
 [[package]]
 name = "zstd"

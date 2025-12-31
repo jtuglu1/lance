@@ -273,6 +273,14 @@ public class DirectoryNamespace implements LanceNamespace, Closeable {
   }
 
   @Override
+  public DeclareTableResponse declareTable(DeclareTableRequest request) {
+    ensureInitialized();
+    String requestJson = toJson(request);
+    String responseJson = declareTableNative(nativeDirectoryNamespaceHandle, requestJson);
+    return fromJson(responseJson, DeclareTableResponse.class);
+  }
+
+  @Override
   public InsertIntoTableResponse insertIntoTable(
       InsertIntoTableRequest request, byte[] requestData) {
     ensureInitialized();
@@ -422,6 +430,8 @@ public class DirectoryNamespace implements LanceNamespace, Closeable {
   private native String createTableNative(long handle, String requestJson, byte[] requestData);
 
   private native String createEmptyTableNative(long handle, String requestJson);
+
+  private native String declareTableNative(long handle, String requestJson);
 
   private native String insertIntoTableNative(long handle, String requestJson, byte[] requestData);
 

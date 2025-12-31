@@ -5534,16 +5534,48 @@ def write_dataset(
 
         from .namespace import (
             CreateEmptyTableRequest,
+            DeclareTableRequest,
             DescribeTableRequest,
             LanceNamespaceStorageOptionsProvider,
         )
 
         # Determine which namespace method to call based on mode
         if mode == "create":
-            request = CreateEmptyTableRequest(
-                id=table_id, location=None, properties=None
-            )
-            response = namespace.create_empty_table(request)
+            # Try declare_table first, fall back to deprecated create_empty_table
+            # for backward compatibility with older namespace implementations.
+            # create_empty_table support will be removed in 3.0.0.
+            if hasattr(namespace, "declare_table"):
+                try:
+                    from lance_namespace.errors import UnsupportedOperationError
+
+                    declare_request = DeclareTableRequest(id=table_id, location=None)
+                    response = namespace.declare_table(declare_request)
+                except (UnsupportedOperationError, NotImplementedError):
+                    # Fall back to deprecated create_empty_table
+                    import warnings
+
+                    warnings.warn(
+                        "create_empty_table is deprecated, use declare_table instead. "
+                        "Support will be removed in 3.0.0.",
+                        DeprecationWarning,
+                        stacklevel=2,
+                    )
+                    fallback_request = CreateEmptyTableRequest(
+                        id=table_id, location=None
+                    )
+                    response = namespace.create_empty_table(fallback_request)
+            else:
+                # Namespace doesn't have declare_table, fall back to create_empty_table
+                import warnings
+
+                warnings.warn(
+                    "create_empty_table is deprecated, use declare_table instead. "
+                    "Support will be removed in 3.0.0.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+                fallback_request = CreateEmptyTableRequest(id=table_id, location=None)
+                response = namespace.create_empty_table(fallback_request)
         elif mode in ("append", "overwrite"):
             request = DescribeTableRequest(id=table_id, version=None)
             response = namespace.describe_table(request)
