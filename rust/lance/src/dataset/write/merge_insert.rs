@@ -1390,29 +1390,40 @@ impl MergeInsertJob {
         }
 
         // Extract merge stats from the execution plan
-        let merge_insert_exec = plan
-            .as_any()
-            .downcast_ref::<exec::FullSchemaMergeInsertExec>()
-            .ok_or_else(|| Error::Internal {
-                message: "Expected FullSchemaMergeInsertExec".into(),
-                location: location!(),
-            })?;
-
-        let stats = merge_insert_exec
-            .merge_stats()
-            .ok_or_else(|| Error::Internal {
+        let (stats, transaction, affected_rows) = if let Some(full_exec) =
+            plan.as_any()
+                .downcast_ref::<exec::FullSchemaMergeInsertExec>()
+        {
+            let stats = full_exec.merge_stats().ok_or_else(|| Error::Internal {
                 message: "Merge stats not available - execution may not have completed".into(),
                 location: location!(),
             })?;
-
-        let transaction = merge_insert_exec
-            .transaction()
-            .ok_or_else(|| Error::Internal {
+            let transaction = full_exec.transaction().ok_or_else(|| Error::Internal {
                 message: "Transaction not available - execution may not have completed".into(),
                 location: location!(),
             })?;
-
-        let affected_rows = merge_insert_exec.affected_rows().map(RowAddrTreeMap::from);
+            let affected_rows = full_exec.affected_rows().map(RowAddrTreeMap::from);
+            (stats, transaction, affected_rows)
+        } else if let Some(delete_exec) = plan
+            .as_any()
+            .downcast_ref::<exec::DeleteOnlyMergeInsertExec>()
+        {
+            let stats = delete_exec.merge_stats().ok_or_else(|| Error::Internal {
+                message: "Merge stats not available - execution may not have completed".into(),
+                location: location!(),
+            })?;
+            let transaction = delete_exec.transaction().ok_or_else(|| Error::Internal {
+                message: "Transaction not available - execution may not have completed".into(),
+                location: location!(),
+            })?;
+            let affected_rows = delete_exec.affected_rows().map(RowAddrTreeMap::from);
+            (stats, transaction, affected_rows)
+        } else {
+            return Err(Error::Internal {
+                message: "Expected FullSchemaMergeInsertExec or DeleteOnlyMergeInsertExec".into(),
+                location: location!(),
+            });
+        };
 
         Ok((transaction, stats, affected_rows))
     }
@@ -5383,13 +5394,17 @@ MergeInsert: on=[id], when_matched=UpdateAll, when_not_matched=InsertAll, when_n
             schema.clone(),
         )));
         let plan = plan_job.create_plan(plan_stream).await.unwrap();
-        // Verify key structural elements: MergeInsert config, Delete action (3), key-only projection
         assert_plan_node_equals(
             plan,
-            "MergeInsert: on=[key], when_matched=Delete, when_not_matched=DoNothing, when_not_matched_by_source=Keep...CASE WHEN key@2 IS NOT NULL AND _rowaddr@1 IS NOT NULL THEN 3 ELSE 0 END as __action]...StreamingTableExec: partition_sizes=1, projection=[key]"
-        ).await.unwrap();
-
-        // WhenMatched::Delete - delete matched rows, don't insert unmatched
+            "DeleteOnlyMergeInsert: on=[key], when_matched=Delete, when_not_matched=DoNothing
+  ...
+    HashJoinExec: ...join_type=Inner...
+      ...
+      ...
+        StreamingTableExec: partition_sizes=1, projection=[key]",
+        )
+        .await
+        .unwrap();
         let job = MergeInsertBuilder::try_new(ds.clone(), keys)
             .unwrap()
             .when_matched(WhenMatched::Delete)
@@ -5463,10 +5478,15 @@ MergeInsert: on=[id], when_matched=UpdateAll, when_not_matched=InsertAll, when_n
         let plan = plan_job.create_plan(plan_stream).await.unwrap();
         assert_plan_node_equals(
             plan,
-            "MergeInsert: on=[key], when_matched=Delete, when_not_matched=DoNothing, when_not_matched_by_source=Keep...CASE WHEN key@2 IS NOT NULL AND _rowaddr@1 IS NOT NULL THEN 3 ELSE 0 END as __action]...StreamingTableExec: partition_sizes=1, projection=[key]"
-        ).await.unwrap();
-
-        // WhenMatched::Delete with ID-only source - should only need key columns for matching
+            "DeleteOnlyMergeInsert: on=[key], when_matched=Delete, when_not_matched=DoNothing
+  ...
+    HashJoinExec: ...join_type=Inner...
+      ...
+      ...
+        StreamingTableExec: partition_sizes=1, projection=[key]",
+        )
+        .await
+        .unwrap();
         let job = MergeInsertBuilder::try_new(ds.clone(), keys)
             .unwrap()
             .when_matched(WhenMatched::Delete)
@@ -5645,10 +5665,15 @@ MergeInsert: on=[id], when_matched=UpdateAll, when_not_matched=InsertAll, when_n
         let plan = plan_job.create_plan(plan_stream).await.unwrap();
         assert_plan_node_equals(
             plan,
-            "MergeInsert: on=[key], when_matched=Delete, when_not_matched=DoNothing, when_not_matched_by_source=Keep...CASE WHEN key@2 IS NOT NULL AND _rowaddr@1 IS NOT NULL THEN 3 ELSE 0 END as __action]...StreamingTableExec: partition_sizes=1, projection=[key]"
-        ).await.unwrap();
-
-        // Execute the delete operation
+            "DeleteOnlyMergeInsert: on=[key], when_matched=Delete, when_not_matched=DoNothing
+  ...
+    HashJoinExec: ...join_type=Inner...
+      ...
+      ...
+        StreamingTableExec: partition_sizes=1, projection=[key]",
+        )
+        .await
+        .unwrap();
         let job = MergeInsertBuilder::try_new(ds.clone(), keys)
             .unwrap()
             .when_matched(WhenMatched::Delete)

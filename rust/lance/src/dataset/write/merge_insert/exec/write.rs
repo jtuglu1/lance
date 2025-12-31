@@ -19,7 +19,10 @@ use datafusion::{
 };
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use futures::{stream, StreamExt};
+use lance_core::{Error, ROW_ADDR, ROW_ID};
+use lance_table::format::RowIdMeta;
 use roaring::RoaringTreemap;
+use snafu::location;
 
 use crate::dataset::transaction::UpdateMode::RewriteRows;
 use crate::dataset::utils::CapturedRowIds;
@@ -37,12 +40,10 @@ use crate::{
             write_fragments_internal, WriteParams,
         },
     },
-    Dataset, Result,
+    Dataset,
 };
-use lance_core::{Error, ROW_ADDR, ROW_ID};
-use lance_table::format::{Fragment, RowIdMeta};
-use snafu::location;
-use std::collections::BTreeMap;
+
+use super::apply_deletions;
 
 /// Shared state for merge insert operations to simplify lock management
 struct MergeState {
@@ -484,53 +485,6 @@ impl FullSchemaMergeInsertExec {
         (total_bytes as usize, total_files)
     }
 
-    /// Delete a batch of rows by row address, returns the fragments modified and the fragments removed
-    async fn apply_deletions(
-        dataset: &Dataset,
-        removed_row_addrs: &RoaringTreemap,
-    ) -> Result<(Vec<Fragment>, Vec<u64>)> {
-        let bitmaps = Arc::new(removed_row_addrs.bitmaps().collect::<BTreeMap<_, _>>());
-
-        enum FragmentChange {
-            Unchanged,
-            Modified(Box<Fragment>),
-            Removed(u64),
-        }
-
-        let mut updated_fragments = Vec::new();
-        let mut removed_fragments = Vec::new();
-
-        let mut stream = futures::stream::iter(dataset.get_fragments())
-            .map(move |fragment| {
-                let bitmaps_ref = bitmaps.clone();
-                async move {
-                    let fragment_id = fragment.id();
-                    if let Some(bitmap) = bitmaps_ref.get(&(fragment_id as u32)) {
-                        match fragment.extend_deletions(*bitmap).await {
-                            Ok(Some(new_fragment)) => {
-                                Ok(FragmentChange::Modified(Box::new(new_fragment.metadata)))
-                            }
-                            Ok(None) => Ok(FragmentChange::Removed(fragment_id as u64)),
-                            Err(e) => Err(e),
-                        }
-                    } else {
-                        Ok(FragmentChange::Unchanged)
-                    }
-                }
-            })
-            .buffer_unordered(dataset.object_store.io_parallelism());
-
-        while let Some(res) = stream.next().await.transpose()? {
-            match res {
-                FragmentChange::Unchanged => {}
-                FragmentChange::Modified(fragment) => updated_fragments.push(*fragment),
-                FragmentChange::Removed(fragment_id) => removed_fragments.push(fragment_id),
-            }
-        }
-
-        Ok((updated_fragments, removed_fragments))
-    }
-
     fn split_updates_and_inserts(
         &self,
         input_stream: SendableRecordBatchStream,
@@ -874,7 +828,7 @@ impl ExecutionPlan for FullSchemaMergeInsertExec {
             let delete_row_addrs_clone = merge_state.delete_row_addrs;
 
             let (updated_fragments, removed_fragment_ids) =
-                Self::apply_deletions(&dataset, &delete_row_addrs_clone).await?;
+                apply_deletions(&dataset, &delete_row_addrs_clone).await?;
 
             // Step 4: Create the transaction operation
             let operation = Operation::Update {

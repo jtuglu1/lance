@@ -13,7 +13,11 @@ use datafusion_expr::{LogicalPlan, UserDefinedLogicalNode, UserDefinedLogicalNod
 use lance_core::{ROW_ADDR, ROW_ID};
 use std::{cmp::Ordering, sync::Arc};
 
-use crate::{dataset::write::merge_insert::exec::FullSchemaMergeInsertExec, Dataset};
+use crate::dataset::write::merge_insert::exec::{
+    DeleteOnlyMergeInsertExec, FullSchemaMergeInsertExec,
+};
+use crate::dataset::{WhenMatched, WhenNotMatchedBySource};
+use crate::Dataset;
 
 use super::{MergeInsertParams, MERGE_ACTION_COLUMN};
 
@@ -199,6 +203,23 @@ impl UserDefinedLogicalNodeCore for MergeInsertWriteNode {
 /// Physical planner for MergeInsertWriteNode.
 pub struct MergeInsertPlanner {}
 
+impl MergeInsertPlanner {
+    /// Check if this is a delete-only operation that can use the optimized path.
+    ///
+    /// Delete-only operations are when:
+    /// - `when_matched` is `Delete`
+    /// - `insert_not_matched` is `false` (no inserts)
+    /// - `delete_not_matched_by_source` is `Keep` (no additional deletes of unmatched target rows)
+    fn is_delete_only(params: &MergeInsertParams) -> bool {
+        matches!(params.when_matched, WhenMatched::Delete)
+            && !params.insert_not_matched
+            && matches!(
+                params.delete_not_matched_by_source,
+                WhenNotMatchedBySource::Keep
+            )
+    }
+}
+
 #[async_trait]
 impl ExtensionPlanner for MergeInsertPlanner {
     async fn plan_extension(
@@ -213,12 +234,21 @@ impl ExtensionPlanner for MergeInsertPlanner {
             if let Some(write_node) = node.as_any().downcast_ref::<MergeInsertWriteNode>() {
                 assert_eq!(logical_inputs.len(), 1, "Inconsistent number of inputs");
                 assert_eq!(physical_inputs.len(), 1, "Inconsistent number of inputs");
-                let exec = FullSchemaMergeInsertExec::try_new(
-                    physical_inputs[0].clone(),
-                    write_node.dataset.clone(),
-                    write_node.params.clone(),
-                )?;
-                Some(Arc::new(exec))
+
+                let exec: Arc<dyn ExecutionPlan> = if Self::is_delete_only(&write_node.params) {
+                    Arc::new(DeleteOnlyMergeInsertExec::try_new(
+                        physical_inputs[0].clone(),
+                        write_node.dataset.clone(),
+                        write_node.params.clone(),
+                    )?)
+                } else {
+                    Arc::new(FullSchemaMergeInsertExec::try_new(
+                        physical_inputs[0].clone(),
+                        write_node.dataset.clone(),
+                        write_node.params.clone(),
+                    )?)
+                };
+                Some(exec)
             } else {
                 None
             },
