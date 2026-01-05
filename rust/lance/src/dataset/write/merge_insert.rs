@@ -5713,4 +5713,143 @@ MergeInsert: on=[id], when_matched=UpdateAll, when_not_matched=InsertAll, when_n
         remaining_keys.sort();
         assert_eq!(remaining_keys, vec![1, 2, 3, 4, 5, 6]);
     }
+
+    /// Test that MergeInsertPlanner::is_delete_only correctly identifies delete-only operations.
+    ///
+    /// Delete-only is true only when:
+    /// - when_matched = Delete
+    /// - insert_not_matched = false (WhenNotMatched::DoNothing)
+    /// - delete_not_matched_by_source = Keep
+    ///
+    /// This test iterates through all valid combinations of WhenMatched, WhenNotMatched,
+    /// and WhenNotMatchedBySource to verify the is_delete_only logic.
+    #[tokio::test]
+    async fn test_is_delete_only() {
+        use itertools::iproduct;
+
+        // All variants to test (excluding UpdateIf and DeleteIf because they require expressions)
+        let when_matched_variants = [
+            WhenMatched::UpdateAll,
+            WhenMatched::DoNothing,
+            WhenMatched::Fail,
+            WhenMatched::Delete,
+        ];
+        let when_not_matched_variants = [WhenNotMatched::InsertAll, WhenNotMatched::DoNothing];
+        let when_not_matched_by_source_variants =
+            [WhenNotMatchedBySource::Keep, WhenNotMatchedBySource::Delete];
+
+        let schema = create_test_schema();
+
+        for (idx, (when_matched, when_not_matched, when_not_matched_by_source)) in iproduct!(
+            when_matched_variants.iter().cloned(),
+            when_not_matched_variants.iter().cloned(),
+            when_not_matched_by_source_variants.iter().cloned()
+        )
+        .enumerate()
+        {
+            // Check if this is a valid (non-no-op) combination, since this would fail try_build()
+            let is_no_op = matches!(when_matched, WhenMatched::DoNothing | WhenMatched::Fail)
+                && matches!(when_not_matched, WhenNotMatched::DoNothing)
+                && matches!(when_not_matched_by_source, WhenNotMatchedBySource::Keep);
+            if is_no_op {
+                continue;
+            }
+
+            let test_uri = format!("memory://test_is_delete_only_{}.lance", idx);
+            let ds = create_test_dataset(&test_uri, LanceFileVersion::V2_0, false).await;
+
+            let new_batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(UInt32Array::from(vec![4, 5, 6])),
+                    Arc::new(UInt32Array::from(vec![2, 2, 2])),
+                    Arc::new(StringArray::from(vec!["A", "B", "C"])),
+                ],
+            )
+            .unwrap();
+
+            let keys = vec!["key".to_string()];
+
+            let mut builder = MergeInsertBuilder::try_new(ds.clone(), keys).unwrap();
+            builder
+                .when_matched(when_matched.clone())
+                .when_not_matched(when_not_matched.clone())
+                .when_not_matched_by_source(when_not_matched_by_source.clone());
+
+            let job = builder.try_build().unwrap();
+
+            let plan_stream = reader_to_stream(Box::new(RecordBatchIterator::new(
+                [Ok(new_batch)],
+                schema.clone(),
+            )));
+            let plan = job.create_plan(plan_stream).await.unwrap();
+
+            let plan_str = datafusion::physical_plan::displayable(plan.as_ref())
+                .indent(true)
+                .to_string();
+
+            let expected_delete_only = matches!(when_matched, WhenMatched::Delete)
+                && matches!(when_not_matched, WhenNotMatched::DoNothing)
+                && matches!(when_not_matched_by_source, WhenNotMatchedBySource::Keep);
+
+            if expected_delete_only {
+                assert!(
+                    plan_str.contains("DeleteOnlyMergeInsert"),
+                    "Expected DeleteOnlyMergeInsert for ({:?}, {:?}, {:?}), but got:\n{}",
+                    when_matched,
+                    when_not_matched,
+                    when_not_matched_by_source,
+                    plan_str
+                );
+            } else {
+                assert!(
+                    plan_str.contains("MergeInsert:")
+                        && !plan_str.contains("DeleteOnlyMergeInsert"),
+                    "Expected MergeInsert (not DeleteOnlyMergeInsert) for ({:?}, {:?}, {:?}), but got:\n{}",
+                    when_matched,
+                    when_not_matched,
+                    when_not_matched_by_source,
+                    plan_str
+                );
+            }
+        }
+    }
+
+    /// Tests that apply_deletions correctly handles an error when applying the row deletions.
+    #[tokio::test]
+    async fn test_apply_deletions_invalid_row_address() {
+        use super::exec::apply_deletions;
+        use roaring::RoaringTreemap;
+
+        let test_uri = "memory://test_apply_deletions_error.lance";
+
+        // Create a dataset with 2 fragments, each with 3 rows
+        let ds = create_test_dataset(test_uri, LanceFileVersion::V2_0, false).await;
+        let fragment_id = ds.get_fragments()[0].id() as u32;
+
+        // Create row addresses with invalid row offsets for this fragment
+        // Row address format: high 32 bits = fragment_id, low 32 bits = row_offset
+        // Each fragment has only 3 rows (offsets 0, 1, 2).
+        //
+        // The error in extend_deletions is triggered when deletion_vector.len() >= physical_rows
+        // AND at least one row ID is >= physical_rows.
+        // So we need to add enough deletions (at least 3) with some being invalid (>= 3).
+        let mut invalid_row_addrs = RoaringTreemap::new();
+        let base = (fragment_id as u64) << 32;
+        // Add 4 deletions: rows 10, 11, 12, 13 (all invalid since only rows 0-2 exist)
+        for row_offset in 10..14u64 {
+            invalid_row_addrs.insert(base | row_offset);
+        }
+
+        let result = apply_deletions(&ds, &invalid_row_addrs).await;
+
+        assert!(result.is_err(), "Expected error for invalid row addresses");
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Deletion vector includes rows that aren't in the fragment"),
+            "Expected 'rows that aren't in the fragment' error, got: {}",
+            err
+        );
+    }
 }
