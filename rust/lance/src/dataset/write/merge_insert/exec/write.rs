@@ -179,25 +179,31 @@ impl FullSchemaMergeInsertExec {
         })
     }
 
-    /// Returns the merge statistics if the execution has completed.
+    /// Takes the merge statistics if the execution has completed.
     /// Returns `None` if the execution is still in progress or hasn't started.
     pub fn merge_stats(&self) -> Option<MergeStats> {
-        self.merge_stats.lock().ok().and_then(|guard| guard.clone())
+        self.merge_stats
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.take())
     }
 
-    /// Returns the transaction if the execution has completed.
+    /// Takes the transaction if the execution has completed.
     /// Returns `None` if the execution is still in progress or hasn't started.
     pub fn transaction(&self) -> Option<Transaction> {
-        self.transaction.lock().ok().and_then(|guard| guard.clone())
+        self.transaction
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.take())
     }
 
-    /// Returns the affected rows (deleted/updated row addresses) if the execution has completed.
+    /// Takes the affected rows (deleted/updated row addresses) if the execution has completed.
     /// Returns `None` if the execution is still in progress or hasn't started.
     pub fn affected_rows(&self) -> Option<RoaringTreemap> {
         self.affected_rows
             .lock()
             .ok()
-            .and_then(|guard| guard.clone())
+            .and_then(|mut guard| guard.take())
     }
 
     /// Creates a filtered stream that captures row addresses for deletion and returns

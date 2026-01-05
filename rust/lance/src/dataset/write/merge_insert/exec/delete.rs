@@ -74,22 +74,28 @@ impl DeleteOnlyMergeInsertExec {
         })
     }
 
-    /// Returns the merge statistics if the execution has completed.
+    /// Takes the merge statistics if the execution has completed.
     pub fn merge_stats(&self) -> Option<MergeStats> {
-        self.merge_stats.lock().ok().and_then(|guard| guard.clone())
+        self.merge_stats
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.take())
     }
 
-    /// Returns the transaction if the execution has completed.
+    /// Takes the transaction if the execution has completed.
     pub fn transaction(&self) -> Option<Transaction> {
-        self.transaction.lock().ok().and_then(|guard| guard.clone())
+        self.transaction
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.take())
     }
 
-    /// Returns the affected rows (deleted row addresses) if the execution has completed.
+    /// Takes the affected rows (deleted row addresses) if the execution has completed.
     pub fn affected_rows(&self) -> Option<RoaringTreemap> {
         self.affected_rows
             .lock()
             .ok()
-            .and_then(|guard| guard.clone())
+            .and_then(|mut guard| guard.take())
     }
 
     async fn collect_deletions(
