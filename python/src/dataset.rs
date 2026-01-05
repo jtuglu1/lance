@@ -1085,6 +1085,37 @@ impl Dataset {
                 }
                 _ => scanner.nearest(&column, &q, k),
             };
+            let distance_range: Option<(Option<f32>, Option<f32>)> =
+                if let Some(dr) = nearest.get_item("distance_range")? {
+                    if dr.is_none() {
+                        None
+                    } else {
+                        let tuple = dr
+                            .downcast::<PyTuple>()
+                            .map_err(|err| PyValueError::new_err(err.to_string()))?;
+                        if tuple.len() != 2 {
+                            return Err(PyValueError::new_err(
+                                "distance_range must be a tuple of (lower_bound, upper_bound)",
+                            ));
+                        }
+                        let lower_any = tuple.get_item(0)?;
+                        let lower = if lower_any.is_none() {
+                            None
+                        } else {
+                            Some(lower_any.extract()?)
+                        };
+                        let upper_any = tuple.get_item(1)?;
+                        let upper = if upper_any.is_none() {
+                            None
+                        } else {
+                            Some(upper_any.extract()?)
+                        };
+                        Some((lower, upper))
+                    }
+                } else {
+                    None
+                };
+
             scanner
                 .map(|s| {
                     let mut s = s.minimum_nprobes(minimum_nprobes);
@@ -1101,6 +1132,9 @@ impl Dataset {
                         s = s.ef(ef);
                     }
                     s.use_index(use_index);
+                    if let Some((lower, upper)) = distance_range {
+                        s.distance_range(lower, upper);
+                    }
                     s
                 })
                 .map_err(|err| PyValueError::new_err(err.to_string()))?;
@@ -1974,7 +2008,7 @@ impl Dataset {
             .infer_error()
     }
 
-    #[pyo3(signature = (index_uuid, index_type, batch_readhead))]
+    #[pyo3(signature = (index_uuid, index_type, batch_readhead=None))]
     fn merge_index_metadata(
         &self,
         index_uuid: &str,
@@ -1984,7 +2018,13 @@ impl Dataset {
         rt().block_on(None, async {
             let store = LanceIndexStore::from_dataset_for_new(self.ds.as_ref(), index_uuid)?;
             let index_dir = self.ds.indices_dir().child(index_uuid);
-            match index_type.to_uppercase().as_str() {
+            let index_type_up = index_type.to_uppercase();
+            log::info!(
+                "merge_index_metadata called with index_type={} (upper={})",
+                index_type,
+                index_type_up
+            );
+            match index_type_up.as_str() {
                 "INVERTED" => {
                     // Call merge_index_files function for inverted index
                     lance_index::scalar::inverted::builder::merge_index_files(
@@ -2004,8 +2044,22 @@ impl Dataset {
                     )
                     .await
                 }
-                _ => Err(Error::InvalidInput {
-                    source: format!("Index type {} is not supported.", index_type).into(),
+                // Precise vector index types: IVF_FLAT, IVF_PQ, IVF_SQ
+                "IVF_FLAT" | "IVF_PQ" | "IVF_SQ" | "VECTOR" => {
+                    // Merge distributed vector index partials and finalize root index via Lance IVF helper
+                    lance::index::vector::ivf::finalize_distributed_merge(
+                        self.ds.object_store(),
+                        &index_dir,
+                        Some(&index_type_up),
+                    )
+                    .await?;
+                    Ok(())
+                }
+                _ => Err(lance::Error::InvalidInput {
+                    source: Box::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!("Unsupported index type (patched): {}", index_type_up),
+                    )),
                     location: location!(),
                 }),
             }

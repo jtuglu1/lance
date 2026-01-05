@@ -41,12 +41,13 @@ from lance.log import LOGGER
 from .blob import BlobFile
 from .dependencies import (
     _check_for_numpy,
+    _check_for_torch,
     torch,
 )
 from .dependencies import numpy as np
 from .dependencies import pandas as pd
 from .fragment import DataFile, FragmentMetadata, LanceFragment
-from .indices import IndexConfig
+from .indices import IndexConfig, SupportedDistributedIndices
 from .lance import (
     CleanupStats,
     Compaction,
@@ -730,7 +731,8 @@ class LanceDataset(pa.dataset.Dataset):
                     "k": 10,
                     "minimum_nprobes": 1,
                     "maximum_nprobes": 50,
-                    "refine_factor": 1
+                    "refine_factor": 1,
+                    "distance_range": (0.0, 1.0),
                 }
 
         batch_size: int, default None
@@ -2646,6 +2648,9 @@ class LanceDataset(pa.dataset.Dataset):
         storage_options: Optional[Dict[str, str]] = None,
         filter_nan: bool = True,
         train: bool = True,
+        # distributed indexing parameters
+        fragment_ids: Optional[List[int]] = None,
+        index_uuid: Optional[str] = None,
         *,
         target_partition_size: Optional[int] = None,
         **kwargs,
@@ -2717,6 +2722,16 @@ class LanceDataset(pa.dataset.Dataset):
             If True, the index will be trained on the data (e.g., compute IVF
             centroids, PQ codebooks). If False, an empty index structure will be
             created without training, which can be populated later.
+        fragment_ids : List[int], optional
+            If provided, the index will be created only on the specified fragments.
+            This enables distributed/fragment-level indexing. When provided, the
+            method creates temporary index metadata but does not commit the index
+            to the dataset. The index can be committed later using
+            merge_index_metadata(index_uuid, "VECTOR", column=..., index_name=...).
+        index_uuid : str, optional
+            A UUID to use for fragment-level distributed indexing. Multiple
+            fragment-level indices need to share UUID for later merging.
+            If not provided, a new UUID will be generated.
         target_partition_size: int, optional
             The target partition size. If set, the number of partitions will be computed
             based on the target partition size.
@@ -2895,6 +2910,39 @@ class LanceDataset(pa.dataset.Dataset):
             )
             accelerator = None
 
+        # IMPORTANT: Distributed indexing is CPU-only. Enforce single-node when
+        # accelerator or torch-related paths are detected.
+        torch_detected = False
+        try:
+            if accelerator is not None:
+                torch_detected = True
+            else:
+                impl = kwargs.get("implementation")
+                use_torch_flag = kwargs.get("use_torch") is True
+                one_pass_flag = kwargs.get("one_pass_ivfpq") is True
+                torch_centroids = _check_for_torch(ivf_centroids)
+                torch_codebook = _check_for_torch(pq_codebook)
+                if (
+                    (isinstance(impl, str) and impl.lower() == "torch")
+                    or use_torch_flag
+                    or one_pass_flag
+                    or torch_centroids
+                    or torch_codebook
+                ):
+                    torch_detected = True
+        except Exception:
+            # Be conservative: if detection fails, do not modify behavior
+            pass
+
+        if torch_detected:
+            if fragment_ids is not None or index_uuid is not None:
+                LOGGER.info(
+                    "Torch detected; "
+                    "enforce single-node indexing (distributed is CPU-only)."
+                )
+            fragment_ids = None
+            index_uuid = None
+
         if accelerator is not None:
             from .vector import (
                 one_pass_assign_ivf_pq_on_accelerator,
@@ -3030,11 +3078,9 @@ class LanceDataset(pa.dataset.Dataset):
                     dim = ivf_centroids.shape[1]
                     values = pa.array(ivf_centroids.reshape(-1))
                     ivf_centroids = pa.FixedSizeListArray.from_arrays(values, dim)
-                # Convert it to RecordBatch because Rust side only accepts RecordBatch.
-                ivf_centroids_batch = pa.RecordBatch.from_arrays(
+                kwargs["ivf_centroids"] = pa.RecordBatch.from_arrays(
                     [ivf_centroids], ["_ivf_centroids"]
                 )
-                kwargs["ivf_centroids"] = ivf_centroids_batch
 
         if "PQ" in index_type:
             if num_sub_vectors is None:
@@ -3043,8 +3089,9 @@ class LanceDataset(pa.dataset.Dataset):
                 )
             kwargs["num_sub_vectors"] = num_sub_vectors
 
+            # Always attach PQ codebook if provided (global training invariant)
             if pq_codebook is not None:
-                # User provided IVF centroids
+                # User provided PQ codebook
                 if _check_for_numpy(pq_codebook) and isinstance(
                     pq_codebook, np.ndarray
                 ):
@@ -3075,6 +3122,13 @@ class LanceDataset(pa.dataset.Dataset):
             kwargs["shuffle_partition_batches"] = shuffle_partition_batches
         if shuffle_partition_concurrency is not None:
             kwargs["shuffle_partition_concurrency"] = shuffle_partition_concurrency
+
+        # Add fragment_ids and index_uuid to kwargs if provided for
+        # distributed indexing
+        if fragment_ids is not None:
+            kwargs["fragment_ids"] = fragment_ids
+        if index_uuid is not None:
+            kwargs["index_uuid"] = index_uuid
 
         timers["final_create_index:start"] = time.time()
         self._ds.create_index(
@@ -3128,31 +3182,43 @@ class LanceDataset(pa.dataset.Dataset):
         batch_readhead: Optional[int] = None,
     ):
         """
-        Merge an index which is not commit at present.
+        Merge distributed index metadata for supported scalar
+        and vector index types.
+
+        This method supports all index types defined in
+        :class:`lance.indices.SupportedDistributedIndices`,
+        including scalar indices and precise vector index types.
+
+        This method does NOT commit changes.
+
+        This API merges temporary index files (e.g., per-fragment partials).
+        After this method returns, callers MUST explicitly commit
+        the index manifest using lance.LanceDataset.commit(...)
+        with a LanceOperation.CreateIndex.
 
         Parameters
         ----------
         index_uuid: str
-            The uuid of the index which want to merge.
+            The shared UUID used when building fragment-level indices.
         index_type: str
-            The type of the index.
-            Only "BTREE" and "INVERTED" are supported now.
+            Index type name. Must be one of the enum values in
+            :class:`lance.indices.SupportedDistributedIndices`
+            (for example ``"IVF_PQ"``).
         batch_readhead: int, optional
-            The number of prefetch batches of sub-page files for merging.
-            Default 1.
+            Prefetch concurrency used by BTREE merge reader. Default: 1.
         """
-        index_type = index_type.upper()
-        if index_type not in [
-            "BTREE",
-            "INVERTED",
-        ]:
+        # Normalize type
+        t = index_type.upper()
+
+        valid = {member.name for member in SupportedDistributedIndices}
+        if t not in valid:
             raise NotImplementedError(
-                (
-                    'Only "BTREE" or "INVERTED" are supported for '
-                    f"merge index metadata.  Received {index_type}",
-                )
+                f"Only {', '.join(sorted(valid))} are supported, received {index_type}"
             )
-        return self._ds.merge_index_metadata(index_uuid, index_type, batch_readhead)
+
+        # Merge physical index files at the index directory
+        self._ds.merge_index_metadata(index_uuid, t, batch_readhead)
+        return None
 
     def session(self) -> Session:
         """
@@ -4700,7 +4766,44 @@ class ScannerBuilder:
         refine_factor: Optional[int] = None,
         use_index: bool = True,
         ef: Optional[int] = None,
+        distance_range: Optional[tuple[Optional[float], Optional[float]]] = None,
     ) -> ScannerBuilder:
+        """Configure nearest neighbor search.
+
+        Parameters
+        ----------
+        column: str
+            The name of the vector column to search.
+        q: QueryVectorLike
+            The query vector.
+        k: int, optional
+            The number of nearest neighbors to return.
+        metric: str, optional
+            The distance metric to use (e.g., "L2", "cosine", "dot", "hamming").
+        nprobes: int, optional
+            The number of partitions to search. Sets both minimum_nprobes and
+            maximum_nprobes to the same value.
+        minimum_nprobes: int, optional
+            The minimum number of partitions to search.
+        maximum_nprobes: int, optional
+            The maximum number of partitions to search.
+        refine_factor: int, optional
+            The refine factor for the search.
+        use_index: bool, default True
+            Whether to use the index for the search.
+        ef: int, optional
+            The ef parameter for HNSW search.
+        distance_range: tuple[Optional[float], Optional[float]], optional
+            A tuple of (lower_bound, upper_bound) to filter results by distance.
+            Both bounds are optional. The lower bound is inclusive and the upper
+            bound is exclusive, so (0.0, 1.0) keeps distances d where
+            0.0 <= d < 1.0, (None, 0.5) keeps d < 0.5, and (0.5, None) keeps d >= 0.5.
+
+        Returns
+        -------
+        ScannerBuilder
+            The scanner builder for method chaining.
+        """
         q, q_dim = _coerce_query_vector(q)
 
         lance_field = self.ds._ds.lance_schema.field_case_insensitive(column)
@@ -4757,6 +4860,13 @@ class ScannerBuilder:
             # `ef` should be >= `k`, but `k` could be None so we can't check it here
             # the rust code will check it
             raise ValueError(f"ef must be > 0 but got {ef}")
+
+        if distance_range is not None:
+            if len(distance_range) != 2:
+                raise ValueError(
+                    "distance_range must be a tuple of (lower_bound, upper_bound)"
+                )
+
         self._nearest = {
             "column": column,
             "q": q,
@@ -4767,6 +4877,7 @@ class ScannerBuilder:
             "refine_factor": refine_factor,
             "use_index": use_index,
             "ef": ef,
+            "distance_range": distance_range,
         }
         return self
 
