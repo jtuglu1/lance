@@ -934,6 +934,7 @@ impl LanceNamespace for DirectoryNamespace {
                     schema: Some(Box::new(json_schema)),
                     storage_options,
                     stats: None,
+                    ..Default::default()
                 })
             }
             Err(err) => {
@@ -960,6 +961,7 @@ impl LanceNamespace for DirectoryNamespace {
                         schema: None,
                         storage_options,
                         stats: None,
+                        ..Default::default()
                     })
                 } else {
                     Err(Error::Namespace {
@@ -1156,7 +1158,6 @@ impl LanceNamespace for DirectoryNamespace {
         Ok(CreateEmptyTableResponse {
             transaction_id: None,
             location: Some(table_uri),
-            properties: None,
             storage_options: self.storage_options.clone(),
         })
     }
@@ -1987,6 +1988,7 @@ mod tests {
             id: Some(vec![]),
             page_token: None,
             limit: None,
+            ..Default::default()
         };
         let result = namespace.list_namespaces(list_req).await;
         assert!(result.is_ok());
@@ -2020,6 +2022,7 @@ mod tests {
             id: Some(vec!["parent".to_string()]),
             page_token: None,
             limit: None,
+            ..Default::default()
         };
         let result = namespace.list_namespaces(list_req).await;
         assert!(result.is_ok());
@@ -2033,6 +2036,7 @@ mod tests {
             id: Some(vec![]),
             page_token: None,
             limit: None,
+            ..Default::default()
         };
         let result = namespace.list_namespaces(list_req).await;
         assert!(result.is_ok());
@@ -2065,6 +2069,7 @@ mod tests {
             id: Some(vec!["test_ns".to_string()]),
             page_token: None,
             limit: None,
+            ..Default::default()
         };
         let result = namespace.list_tables(list_req).await;
         assert!(result.is_ok());
@@ -2113,6 +2118,7 @@ mod tests {
             id: Some(vec!["test_ns".to_string()]),
             page_token: None,
             limit: None,
+            ..Default::default()
         };
         let result = namespace.list_tables(list_req).await;
         assert!(result.is_ok());
@@ -2248,6 +2254,7 @@ mod tests {
         // Describe namespace and verify properties
         let describe_req = DescribeNamespaceRequest {
             id: Some(vec!["test_ns".to_string()]),
+            ..Default::default()
         };
         let result = namespace.describe_namespace(describe_req).await;
         assert!(result.is_ok());
@@ -2326,6 +2333,7 @@ mod tests {
             id: Some(vec!["ns1".to_string()]),
             page_token: None,
             limit: None,
+            ..Default::default()
         };
         let result = namespace.list_tables(list_req).await.unwrap();
         assert_eq!(result.tables.len(), 1);
@@ -2335,6 +2343,7 @@ mod tests {
             id: Some(vec!["ns2".to_string()]),
             page_token: None,
             limit: None,
+            ..Default::default()
         };
         let result = namespace.list_tables(list_req).await.unwrap();
         assert_eq!(result.tables.len(), 1);

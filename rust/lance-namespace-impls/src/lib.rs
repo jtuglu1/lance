@@ -104,7 +104,7 @@ pub use credentials::azure::{AzureCredentialVendor, AzureCredentialVendorConfig}
 pub use credentials::azure_props;
 
 #[cfg(feature = "rest")]
-pub use rest::{RestNamespace, RestNamespaceBuilder};
+pub use rest::{HeaderProvider, RestNamespace, RestNamespaceBuilder, StaticHeaderProvider};
 
 #[cfg(feature = "rest-adapter")]
 pub use rest_adapter::{RestAdapter, RestAdapterConfig, RestAdapterHandle};

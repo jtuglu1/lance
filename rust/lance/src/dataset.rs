@@ -823,7 +823,7 @@ impl Dataset {
                 let request = CreateEmptyTableRequest {
                     id: Some(table_id.clone()),
                     location: None,
-                    properties: None,
+                    ..Default::default()
                 };
                 let response =
                     namespace
@@ -872,6 +872,7 @@ impl Dataset {
                     id: Some(table_id.clone()),
                     version: None,
                     with_table_uri: None,
+                    ..Default::default()
                 };
                 let response =
                     namespace

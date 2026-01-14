@@ -138,6 +138,7 @@ impl DatasetBuilder {
             id: Some(table_id.clone()),
             version: None,
             with_table_uri: None,
+            ..Default::default()
         };
 
         let response = namespace

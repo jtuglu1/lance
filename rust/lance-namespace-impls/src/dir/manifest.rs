@@ -1113,6 +1113,7 @@ impl LanceNamespace for ManifestNamespace {
                             schema: Some(Box::new(json_schema)),
                             storage_options: self.storage_options.clone(),
                             stats: None,
+                            ..Default::default()
                         })
                     }
                     Err(_) => {
@@ -1126,6 +1127,7 @@ impl LanceNamespace for ManifestNamespace {
                             schema: None,
                             storage_options: self.storage_options.clone(),
                             stats: None,
+                            ..Default::default()
                         })
                     }
                 }
@@ -1624,7 +1626,6 @@ impl LanceNamespace for ManifestNamespace {
         Ok(CreateEmptyTableResponse {
             transaction_id: None,
             location: Some(table_uri),
-            properties: None,
             storage_options: self.storage_options.clone(),
         })
     }
@@ -2172,6 +2173,7 @@ mod tests {
         // Verify namespace exists
         let exists_req = NamespaceExistsRequest {
             id: Some(vec!["ns1".to_string()]),
+            ..Default::default()
         };
         let result = dir_namespace.namespace_exists(exists_req).await;
         assert!(result.is_ok(), "Namespace should exist");
@@ -2181,6 +2183,7 @@ mod tests {
             id: Some(vec![]),
             page_token: None,
             limit: None,
+            ..Default::default()
         };
         let result = dir_namespace.list_namespaces(list_req).await;
         assert!(result.is_ok());
@@ -2225,6 +2228,7 @@ mod tests {
         // Verify nested namespace exists
         let exists_req = NamespaceExistsRequest {
             id: Some(vec!["parent".to_string(), "child".to_string()]),
+            ..Default::default()
         };
         let result = dir_namespace.namespace_exists(exists_req).await;
         assert!(result.is_ok(), "Nested namespace should exist");
@@ -2234,6 +2238,7 @@ mod tests {
             id: Some(vec!["parent".to_string()]),
             page_token: None,
             limit: None,
+            ..Default::default()
         };
         let result = dir_namespace.list_namespaces(list_req).await;
         assert!(result.is_ok());
@@ -2301,6 +2306,7 @@ mod tests {
         // Verify namespace no longer exists
         let exists_req = NamespaceExistsRequest {
             id: Some(vec!["ns1".to_string()]),
+            ..Default::default()
         };
         let result = dir_namespace.namespace_exists(exists_req).await;
         assert!(result.is_err(), "Namespace should not exist after drop");
@@ -2379,6 +2385,7 @@ mod tests {
             id: Some(vec!["ns1".to_string()]),
             page_token: None,
             limit: None,
+            ..Default::default()
         };
         let result = dir_namespace.list_tables(list_req).await;
         assert!(result.is_ok());
@@ -2415,6 +2422,7 @@ mod tests {
         // Describe the namespace
         let describe_req = DescribeNamespaceRequest {
             id: Some(vec!["ns1".to_string()]),
+            ..Default::default()
         };
         let result = dir_namespace.describe_namespace(describe_req).await;
         assert!(

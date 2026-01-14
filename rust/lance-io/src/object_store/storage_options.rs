@@ -115,6 +115,7 @@ impl StorageOptionsProvider for LanceNamespaceStorageOptionsProvider {
             id: Some(self.table_id.clone()),
             version: None,
             with_table_uri: None,
+            ..Default::default()
         };
 
         let response = self
